@@ -2444,9 +2444,27 @@ async function mediaCreatePeer(call,localStream){
     if(st==='disconnected'){call.status='reconnecting';renderMedia();setTimeout(()=>{if(state.media.calls.has(call.id)&&call.pc?.connectionState==='disconnected')mediaEndCall(call.id,false);},6000);}
   };
   if(localStream){
-    for(const track of localStream.getTracks()){
-      if(call.kind==='audio' && track.kind!=='audio')continue;
-      pc.addTrack(track,localStream);
+    if(call.kind==='video'){
+      const videoTrack=localStream.getVideoTracks?.()[0]||null;
+      const audioTrack=localStream.getAudioTracks?.()[0]||null;
+      if(videoTrack){
+        videoTrack.enabled=true;
+        try{pc.addTransceiver(videoTrack,{streams:[localStream],direction:'sendrecv'});}catch{pc.addTrack(videoTrack,localStream);}
+      }
+      if(audioTrack){
+        audioTrack.enabled=true;
+        try{pc.addTransceiver(audioTrack,{streams:[localStream],direction:'sendrecv'});}catch{pc.addTrack(audioTrack,localStream);}
+      }
+      if(!videoTrack){
+        mediaDebug('media.video.error',{callId:call.id,reason:'missing-local-video-track'});
+        throw new Error('Video call could not start because the camera track is missing.');
+      }
+    }else{
+      for(const track of localStream.getTracks()){
+        if(track.kind!=='audio')continue;
+        track.enabled=true;
+        pc.addTrack(track,localStream);
+      }
     }
   }else{
     // Explicit recv-only transceivers improve one-way room broadcast reliability,
