@@ -1710,7 +1710,7 @@ const state = {
   diagSamples:new Map(), diagLast:null,
   peers:new Map(), primaryPeerId:null, selectedPeerIds:new Set(), chat:{messages:[],seen:new Set(),target:'all'},
   room:{active:false,role:null,id:'',name:'P2P Room',sessionId:'',pendingPeerId:null,currentInviteText:'',currentInviteCode:'',adminId:'',members:new Map()}, roomMaxPeers:30, roomAnswerBuffer:'', relayTransfers:new Map(), transferJobs:new Map(), pausedTransfers:new Set(), cancelledTransfers:new Set(), transferQueue:[], activeTransferPeers:new Set(), maxConcurrentTransfers:3, reconnectTimer:null, reconnectAttempts:0, internet:{active:false,role:null,roomCode:'',peer:null,provider:'peerjs-cloud',loaded:false,turnIceServers:[],turnLoadedAt:0,turnExpiresAt:0,turnError:''}, notifications:{enabled:false},
-  whiteboard:{sessionId:'',active:false,userClosed:false,currentPageId:'page-1',pages:[{id:'page-1',name:'Page 1',objects:[]}],policy:'admin',tool:'select',color:'#2d6cdf',width:4,zoom:1,viewX:0,viewY:0,viewW:1200,viewH:750,undo:[],redo:[],seenOps:new Set(),drawing:null,remoteApplying:false,selectedObjectId:''}, media:{calls:new Map(),pendingInvites:new Map(),roomVoiceMode:'admin',roomVoiceActive:false,roomVideoActive:false,roomVideoPresenterId:'',speakingAllowed:false,hands:new Map(),videoRequests:new Map(),speakerIds:new Set(),localAudio:null,localAV:null,audioCtx:null,audioUnlocked:false}
+  whiteboard:{sessionId:'',active:false,userClosed:false,currentPageId:'page-1',pages:[{id:'page-1',name:'Page 1',objects:[]}],policy:'admin',tool:'select',color:'#2d6cdf',width:4,zoom:1,viewX:0,viewY:0,viewW:1200,viewH:750,undo:[],redo:[],seenOps:new Set(),drawing:null,remoteApplying:false,selectedObjectId:''}, media:{calls:new Map(),pendingInvites:new Map(),roomVoiceMode:'admin',roomVoiceActive:false,roomVideoActive:false,roomVideoPresenterId:'',speakingAllowed:false,hands:new Map(),videoRequests:new Map(),speakerIds:new Set(),allowedSpeakers:new Set(),localAudio:null,localAV:null,audioCtx:null,audioUnlocked:false}
 };
 
 try{localStorage.setItem('p2p-member-id',state.memberId)}catch{}
@@ -2153,7 +2153,7 @@ function createPeerConnection(peerId,role,{room=false,name='Peer'}={}){
 }
 function setPrimaryIfNeeded(peerId){if(!state.primaryPeerId||!state.peers.get(state.primaryPeerId)?.connected){state.primaryPeerId=peerId;syncPrimary(peerId);}}
 function cleanupPeer(peerId){const p=state.peers.get(peerId);if(!p)return;try{p.dc?.close()}catch{}try{p.pc?.close()}catch{}state.peers.delete(peerId);state.selectedPeerIds.delete(peerId);if(state.primaryPeerId===peerId)state.primaryPeerId=null;syncPrimary();renderPeers();renderChat();}
-function mediaCleanupAll(){for(const c of [...state.media.calls.values()]){try{c.audioSource?.disconnect()}catch{}try{c.audioGain?.disconnect()}catch{}try{c.pc?.close()}catch{}}state.media.calls.clear();for(const k of ['localAudio','localAV']){const st=state.media[k];if(st)for(const t of st.getTracks())try{t.stop()}catch{}state.media[k]=null;}state.media.getUserMediaPromises={};state.media.pendingInvites.clear();state.media.hands.clear();state.media.videoRequests.clear();state.media.speakerIds.clear();state.media.roomVoiceActive=false;state.media.roomVideoActive=false;state.media.roomVideoPresenterId='';state.media.speakingAllowed=false;try{state.media.audioCtx?.close?.()}catch{}state.media.audioCtx=null;state.media.audioUnlocked=false;renderMedia();}
+function mediaCleanupAll(){for(const c of [...state.media.calls.values()]){mediaClearCallTimeout(c);try{c.audioSource?.disconnect()}catch{}try{c.audioGain?.disconnect()}catch{}try{c.pc?.close()}catch{}}state.media.calls.clear();for(const k of ['localAudio','localAV']){const st=state.media[k];if(st)for(const t of st.getTracks())try{t.stop()}catch{}state.media[k]=null;}state.media.getUserMediaPromises={};state.media.pendingInvites.clear();state.media.hands.clear();state.media.videoRequests.clear();state.media.speakerIds.clear();state.media.allowedSpeakers.clear();state.media.roomVoiceActive=false;state.media.roomVideoActive=false;state.media.roomVideoPresenterId='';state.media.speakingAllowed=false;try{state.media.audioCtx?.close?.()}catch{}state.media.audioCtx=null;state.media.audioUnlocked=false;renderMedia();}
 function cleanupConnection(){mediaCleanupAll();if(state.reconnectTimer){clearTimeout(state.reconnectTimer);state.reconnectTimer=null;}if(state.internet?.peer){try{state.internet.peer.destroy()}catch{ }state.internet.peer=null;state.internet.active=false;state.internet.role=null;state.internet.roomCode='';}if(state.statsTimer){clearInterval(state.statsTimer);state.statsTimer=null;}for(const id of [...state.peers.keys()])cleanupPeer(id);state.pc=null;state.dc=null;state.connected=false;state.authenticated=false;state.sessionKeys=null;state.currentSend=null;state.sending=false;state.diagSamples.clear();state.diagLast=null;state.room.active=false;state.room.role=null;state.room.id='';state.room.name='P2P Room';state.room.sessionId='';state.room.pendingPeerId=null;state.room.currentInviteText='';state.room.currentInviteCode='';state.room.adminId='';state.room.members=new Map();updateSendUi();renderPeers();renderDiagnostics([]);}
 function setupPeerConnection(role){cleanupConnection();const pc=createPeerConnection('primary',role,{room:false,name:'Peer'});setPrimaryIfNeeded('primary');return pc;}
 function attachDataChannel(peerId,dc){
@@ -2316,7 +2316,7 @@ async function mediaCreatePeer(call,localStream){
   pc.oniceconnectionstatechange=()=>{call.iceState=pc.iceConnectionState;renderMedia();if(pc.iceConnectionState==='failed'){const hasTurn=buildIceServers().some(s=>s.urls.some(u=>/^turns?:/i.test(u)));setConn('Media ICE failed',hasTurn?'No usable media candidate pair was found. One ICE restart will be attempted.':'Direct media path failed. No TURN relay is configured for this browser/network.','bad');if(!call.iceRestartTried){mediaRestartIce(call).then(ok=>{if(!ok&&state.media.calls.has(call.id))setTimeout(()=>mediaEndCall(call.id,false),1200);});}else setTimeout(()=>{if(state.media.calls.has(call.id))mediaEndCall(call.id,false);},1200);}};
   pc.onconnectionstatechange=()=>{
     const st=pc.connectionState;call.connectionState=st;
-    if(st==='connected'){call.active=true;call.status='connected';renderMedia();}
+    if(st==='connected'){call.active=true;call.status='connected';mediaClearCallTimeout(call);renderMedia();}
     if(['failed','closed'].includes(st)){mediaEndCall(call.id,false);}
     if(st==='disconnected'){call.status='reconnecting';renderMedia();setTimeout(()=>{if(state.media.calls.has(call.id)&&call.pc?.connectionState==='disconnected')mediaEndCall(call.id,false);},6000);}
   };
@@ -2324,19 +2324,24 @@ async function mediaCreatePeer(call,localStream){
   return pc;
 }
 function mediaCallId(){return `m-${uid()}-${Date.now().toString(36)}`;}
+function mediaFindActiveCall(peerMemberId,kind,scope='direct'){const mid=String(peerMemberId||'');return [...state.media.calls.values()].find(c=>String(c.peerMemberId||'')===mid&&c.kind===kind&&c.scope===scope);}
+function mediaArmCallTimeout(call,timeoutMs=35000){if(!call)return;clearTimeout(call.timeoutTimer);call.timeoutTimer=setTimeout(()=>{if(!state.media.calls.has(call.id))return;const live=call.pc?.connectionState==='connected'||call.active;if(live)return;toast(`${mediaKindLabel(call.kind)} call timed out.`);mediaEndCall(call.id,true);},timeoutMs);}
+function mediaClearCallTimeout(call){if(!call?.timeoutTimer)return;clearTimeout(call.timeoutTimer);call.timeoutTimer=null;}
 async function mediaStartDirectCall(memberId,kind){
   if(!memberId)return;
   await mediaUnlockAudio();
   if(state.media.calls.size>=12){toast('Too many active calls. End an existing call first.');return;}
+  if(mediaFindActiveCall(memberId,kind,'direct')){toast('A call of this type is already active with this member.');return;}
+  let call=null;
   try{
     const stream=await mediaGetLocalStream(kind);
-    const call={id:mediaCallId(),peerMemberId:String(memberId),kind,scope:'direct',broadcast:false,initiator:true,active:false,status:'calling',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:'Direct peer'};
-    state.media.calls.set(call.id,call);renderMedia();
+    call={id:mediaCallId(),peerMemberId:String(memberId),kind,scope:'direct',broadcast:false,initiator:true,active:false,status:'calling',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:'Direct peer'};
+    state.media.calls.set(call.id,call);mediaArmCallTimeout(call);renderMedia();
     const pc=await mediaCreatePeer(call,stream);
     const offer=await pc.createOffer();await pc.setLocalDescription(offer);
     await mediaSendSignal(memberId,{t:'media-invite',callId:call.id,kind,scope:'direct',broadcast:false,offer:pc.localDescription?.toJSON?pc.localDescription.toJSON():pc.localDescription,fromName:state.device});
     setConn('Calling',`${mediaKindLabel(kind)} call to ${peerDisplayNameByMember(memberId)}…`,'good');
-  }catch(err){toast(err.message||String(err));renderMedia();}
+  }catch(err){if(call&&state.media.calls.has(call.id))mediaEndCall(call.id,false);toast(err.message||String(err));renderMedia();}
 }
 function peerDisplayNameByMember(memberId){
   const p=[...state.peers.values()].find(x=>String(x.memberId||'')===String(memberId));
@@ -2344,19 +2349,31 @@ function peerDisplayNameByMember(memberId){
   const m=state.room.members.get(String(memberId));return m?.name||'Member';
 }
 function mediaShowIncoming(m){
-  state.media.pendingInvites.set(String(m.callId),m);
+  const callId=String(m.callId||'');
+  if(!callId)return;
+  if(state.media.pendingInvites.has(callId)||state.media.calls.has(callId))return;
+  if(mediaFindActiveCall(m.fromMemberId,m.kind,m.scope||'direct')){mediaSendSignal(m.fromMemberId,{t:'media-reject',callId}).catch(()=>{});return;}
+  state.media.pendingInvites.set(callId,m);
   const kind=mediaKindLabel(m.kind), name=m.fromName||peerDisplayNameByMember(m.fromMemberId);
-  showModal(m.kind==='video'?I18N[state.lang].incomingVideo:I18N[state.lang].incomingVoice,`<div class="modal-message"><b>${escapeHtml(name)}</b> is calling you with a ${escapeHtml(kind.toLowerCase())} call.</div>`,async()=>{await mediaAcceptInvite(m);return true;},()=>{state.media.pendingInvites.delete(String(m.callId));mediaSendSignal(m.fromMemberId,{t:'media-reject',callId:m.callId}).catch(()=>{});});
+  showModal(m.kind==='video'?I18N[state.lang].incomingVideo:I18N[state.lang].incomingVoice,`<div class="modal-message"><b>${escapeHtml(name)}</b> is calling you with a ${escapeHtml(kind.toLowerCase())} call.</div>`,async()=>{await mediaAcceptInvite(m);return true;},()=>{state.media.pendingInvites.delete(callId);mediaSendSignal(m.fromMemberId,{t:'media-reject',callId:m.callId}).catch(()=>{});});
 }
 async function mediaAcceptInvite(m,auto=false){
   const id=String(m.callId);if(state.media.calls.has(id))return;
+  const scope=String(m.scope||'direct');
+  const peerMemberId=String(m.fromMemberId||'');
+  if(!peerMemberId)return;
+  if(scope==='room'&&state.room.active&&state.room.role!=='host'&&peerMemberId!==String(state.room.adminId||'')){
+    mediaSendSignal(peerMemberId,{t:'media-reject',callId:id}).catch(()=>{});
+    return;
+  }
+  if(mediaFindActiveCall(peerMemberId,m.kind==='video'?'video':'audio',scope)){mediaSendSignal(peerMemberId,{t:'media-reject',callId:id}).catch(()=>{});return;}
   await mediaUnlockAudio();
   state.media.pendingInvites.delete(id);
   try{
     const broadcast=!!m.broadcast;
     const stream=broadcast?null:await mediaGetLocalStream(m.kind);
-    const call={id,peerMemberId:String(m.fromMemberId),kind:m.kind==='video'?'video':'audio',scope:m.scope||'direct',broadcast,speakerMemberId:String(m.fromMemberId||''),initiator:false,active:false,status:'connecting',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:m.scope==='room'?'Room':'Direct peer'};
-    state.media.calls.set(id,call);renderMedia();
+    const call={id,peerMemberId,kind:m.kind==='video'?'video':'audio',scope,broadcast,speakerMemberId:peerMemberId,initiator:false,active:false,status:'connecting',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:scope==='room'?'Room':'Direct peer'};
+    state.media.calls.set(id,call);mediaArmCallTimeout(call);renderMedia();
     const pc=await mediaCreatePeer(call,stream);
     await pc.setRemoteDescription(new RTCSessionDescription(m.offer));
     await mediaFlushPendingIce(call);
@@ -2385,7 +2402,9 @@ async function mediaFlushPendingIce(call){
   for(const c of queued){try{await call.pc.addIceCandidate(c);}catch{}}
 }
 function mediaEndCall(callId,notify=true){
-  const call=state.media.calls.get(String(callId));if(!call)return;
+  const id=String(callId);
+  const call=state.media.calls.get(id);if(!call){state.media.pendingInvites.delete(id);return;}
+  mediaClearCallTimeout(call);
   if(notify)mediaSendSignal(call.peerMemberId,{t:'media-end',callId:call.id}).catch(()=>{});
   try{call.audioSource?.disconnect()}catch{}
   try{call.audioGain?.disconnect()}catch{}
@@ -2394,6 +2413,7 @@ function mediaEndCall(callId,notify=true){
   try{call.pc?.getSenders?.().forEach(s=>{try{s.replaceTrack(null)}catch{}})}catch{}
   try{call.pc?.close()}catch{}
   call.localStream=null;call.remoteStream=null;call.pc=null;
+  state.media.pendingInvites.delete(id);
   state.media.calls.delete(call.id);
   renderMedia();
   if(!state.media.calls.size)mediaStopLocalIfIdle();
@@ -2410,15 +2430,22 @@ async function mediaBroadcast(kind,targets,scope='room',broadcast=true){
   let stream;
   try{stream=await mediaGetLocalStream(kind);}catch(err){toast(err.message||String(err));return false;}
   const targetList=targets.map(String).filter(id=>id!==String(state.memberId));
+  if(!targetList.length)return true;
+  let successCount=0;
   for(const memberId of targetList){
+    let call=null;
     try{
-      const call={id:mediaCallId(),peerMemberId:memberId,kind,scope,broadcast:true,speakerMemberId:String(state.memberId),initiator:true,active:false,status:'calling',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:scope==='room'?'Room':'Direct peer'};
-      state.media.calls.set(call.id,call);const pc=await mediaCreatePeer(call,stream);const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+      call={id:mediaCallId(),peerMemberId:memberId,kind,scope,broadcast:true,speakerMemberId:String(state.memberId),initiator:true,active:false,status:'calling',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:scope==='room'?'Room':'Direct peer'};
+      state.media.calls.set(call.id,call);mediaArmCallTimeout(call);const pc=await mediaCreatePeer(call,stream);const offer=await pc.createOffer();await pc.setLocalDescription(offer);
       await mediaSendSignal(memberId,{t:'media-invite',callId:call.id,kind,scope,broadcast,offer:pc.localDescription?.toJSON?pc.localDescription.toJSON():pc.localDescription,fromName:state.device});
-    }catch{}
+      successCount++;
+    }catch{
+      if(call&&state.media.calls.has(call.id))mediaEndCall(call.id,false);
+    }
   }
+  if(successCount<targetList.length&&successCount>0)toast('Some members could not be reached for this call.');
   renderMedia();
-  return true;
+  return successCount>0;
 }
 function mediaRoomTargets(){return mediaConnectedMemberIds().filter(id=>id!==String(state.memberId));}
 async function startRoomVoiceAs(memberId){
@@ -2439,7 +2466,7 @@ function stopRoomVoiceAs(memberId){
   renderMedia();
 }
 function endAllRoomVoice(){
-  state.media.speakerIds.clear();state.media.roomVoiceActive=false;state.media.speakingAllowed=false;
+  state.media.speakerIds.clear();state.media.allowedSpeakers.clear();state.media.roomVoiceActive=false;state.media.speakingAllowed=false;
   mediaStopScope('room','audio');
   if(state.room.role==='host')for(const id of mediaConnectedMemberIds())mediaSendSignal(id,{t:'media-room-voice-stop',fromMemberId:state.memberId,toMemberId:id}).catch(()=>{});
   renderMedia();
@@ -2447,7 +2474,7 @@ function endAllRoomVoice(){
 async function adminStartRoomVoice(){
   if(state.room.role!=='host')return;
   if(state.media.roomVoiceActive){endAllRoomVoice();return;}
-  state.media.roomVoiceActive=true;state.media.speakerIds.clear();
+  state.media.roomVoiceActive=true;state.media.speakerIds.clear();state.media.allowedSpeakers.clear();
   for(const id of mediaConnectedMemberIds())mediaSendSignal(id,{t:'media-room-mode',fromMemberId:state.memberId,toMemberId:id,mode:state.media.roomVoiceMode,active:true}).catch(()=>{});
   state.media.speakerIds.add(String(state.memberId));
   const ok=await mediaBroadcast('audio',mediaRoomTargets(),'room',true);
@@ -2479,11 +2506,20 @@ function mediaRequestPresenter(){
 }
 function mediaAllowSpeaker(memberId){
   if(state.room.role!=='host')return;
-  state.media.hands.delete(String(memberId));
-  mediaSendSignal(memberId,{t:'media-permission',fromMemberId:state.memberId,toMemberId:memberId,allow:true}).catch(()=>{});
+  const sid=String(memberId||'');if(!sid)return;
+  state.media.hands.delete(sid);
+  state.media.allowedSpeakers.add(sid);
+  mediaSendSignal(sid,{t:'media-permission',fromMemberId:state.memberId,toMemberId:sid,allow:true}).catch(()=>{});
   renderMedia();
 }
-function mediaDenySpeaker(memberId){state.media.hands.delete(String(memberId));renderMedia();}
+function mediaDenySpeaker(memberId){
+  const sid=String(memberId||'');if(!sid)return;
+  state.media.hands.delete(sid);
+  state.media.allowedSpeakers.delete(sid);
+  state.media.speakerIds.delete(sid);
+  mediaSendSignal(sid,{t:'media-permission',fromMemberId:state.memberId,toMemberId:sid,allow:false}).catch(()=>{});
+  renderMedia();
+}
 function mediaRenderTile(call){
   const tile=document.createElement('div');
   tile.className='media-tile';
@@ -2597,7 +2633,7 @@ function renderMedia(){
       if(state.media.roomVoiceActive&&state.media.roomVoiceMode==='moderated'&&!state.media.speakingAllowed)c.push(`<button class="btn" id="mediaRaiseHandBtn">🙋 ${escapeHtml(I18N[state.lang].raiseHand)}</button>`);
       if(state.media.roomVoiceActive&&(state.media.roomVoiceMode==='open'||state.media.speakingAllowed))c.push(`<button class="btn ${state.media.speakerIds.has(String(state.memberId))?'danger':'primary'}" id="mediaSpeakRoomBtn">${state.media.speakerIds.has(String(state.memberId))?'🎙 '+escapeHtml(I18N[state.lang].stopSpeaking):'🎙 '+escapeHtml(I18N[state.lang].speakToRoom)}</button>`);
       c.push(`<div class="media-note">${state.media.roomVideoPresenterId?`Video presenter: ${escapeHtml(peerDisplayNameByMember(state.media.roomVideoPresenterId))}`:'Room video is off.'}</div>`);
-      if(state.media.roomVoiceActive&&state.room.role!=='host')c.push(`<button class="btn" id="mediaRequestPresenterBtn">📹 ${escapeHtml(I18N[state.lang].requestToPresent)}</button>`);
+      if(state.room.role!=='host')c.push(`<button class="btn" id="mediaRequestPresenterBtn">📹 ${escapeHtml(I18N[state.lang].requestToPresent)}</button>`);
     }
   }
   els.mediaControls.innerHTML=c.join('');
@@ -2613,8 +2649,26 @@ function renderMedia(){
   els.mediaControls.querySelectorAll('[data-media-presenter]').forEach(b=>b.addEventListener('click',()=>mediaSetRoomPresenter(b.dataset.mediaPresenter)));
 }
 
+function mediaSignalFromAdmin(peerId,m={}){
+  const p=getPeer(peerId);
+  const senderId=String(m.fromMemberId||p?.memberId||'');
+  const adminId=String(state.room.adminId||'');
+  if(!senderId)return false;
+  if(adminId)return senderId===adminId;
+  return p?.roomRole==='Admin';
+}
+
 async function handleMediaSignal(m,peerId){
   const target=String(m.toMemberId||'');
+  const fromMemberId=String(m.fromMemberId||'');
+  const senderPeerMemberId=String(roomMemberIdForPeer(peerId)||'');
+  const adminOnlySignals=['media-room-mode','media-room-voice-stop','media-permission','media-presenter-start','media-presenter-stop','media-room-presenter'];
+  if(state.room.active&&adminOnlySignals.includes(String(m.t||''))){
+    const allowed=state.room.role==='host'
+      ? String(fromMemberId||senderPeerMemberId)===String(state.memberId)
+      : mediaSignalFromAdmin(peerId,m);
+    if(!allowed)return;
+  }
   if(state.room.active&&state.room.role==='host'&&m.routeToMemberId&&String(m.routeToMemberId)!==String(state.memberId)){
     const tm=state.room.members.get(String(m.routeToMemberId));
     const tp=tm?.peerId?getPeer(tm.peerId):mediaPeerForMember(m.routeToMemberId);
@@ -2627,17 +2681,37 @@ async function handleMediaSignal(m,peerId){
     if(isRoom){await mediaAcceptInvite(m,true);return;}
     mediaShowIncoming(m);return;
   }
-  if(m.t==='media-answer')return mediaAcceptOfferAnswer(m);
-  if(m.t==='media-reoffer'){const c=state.media.calls.get(String(m.callId));if(!c?.pc)return;try{await c.pc.setRemoteDescription(new RTCSessionDescription(m.offer));await mediaFlushPendingIce(c);const a=await c.pc.createAnswer();await c.pc.setLocalDescription(a);await mediaSendSignal(c.peerMemberId,{t:'media-answer',callId:c.id,answer:c.pc.localDescription?.toJSON?c.pc.localDescription.toJSON():c.pc.localDescription});}catch(err){c.iceError=err?.message||String(err);renderMedia();}return;}
-  if(m.t==='media-ice')return mediaHandleIce(m);
-  if(m.t==='media-reject'){const c=state.media.calls.get(String(m.callId));if(c){toast(`${mediaKindLabel(c.kind)} call declined.`);mediaEndCall(c.id,false);}return;}
-  if(m.t==='media-end'){mediaEndCall(String(m.callId),false);return;}
+  if(m.t==='media-answer'){const c=state.media.calls.get(String(m.callId));if(!c||String(c.peerMemberId)!==String(fromMemberId||senderPeerMemberId||target))return;return mediaAcceptOfferAnswer(m);}
+  if(m.t==='media-reoffer'){const c=state.media.calls.get(String(m.callId));if(!c?.pc||String(c.peerMemberId)!==String(fromMemberId||senderPeerMemberId||target))return;try{await c.pc.setRemoteDescription(new RTCSessionDescription(m.offer));await mediaFlushPendingIce(c);const a=await c.pc.createAnswer();await c.pc.setLocalDescription(a);await mediaSendSignal(c.peerMemberId,{t:'media-answer',callId:c.id,answer:c.pc.localDescription?.toJSON?c.pc.localDescription.toJSON():c.pc.localDescription});}catch(err){c.iceError=err?.message||String(err);renderMedia();}return;}
+  if(m.t==='media-ice'){const c=state.media.calls.get(String(m.callId));if(!c||String(c.peerMemberId)!==String(fromMemberId||senderPeerMemberId||target))return;return mediaHandleIce(m);}
+  if(m.t==='media-reject'){const c=state.media.calls.get(String(m.callId));if(c&&String(c.peerMemberId)===String(fromMemberId||senderPeerMemberId||target)){toast(`${mediaKindLabel(c.kind)} call declined.`);mediaEndCall(c.id,false);}return;}
+  if(m.t==='media-end'){const c=state.media.calls.get(String(m.callId));if(c&&String(c.peerMemberId)===String(fromMemberId||senderPeerMemberId||target))mediaEndCall(String(m.callId),false);return;}
   if(m.t==='media-room-mode'){state.media.roomVoiceMode=m.mode||'admin';state.media.roomVoiceActive=!!m.active;renderMedia();return;}
   if(m.t==='media-room-voice-stop'){state.media.roomVoiceActive=false;state.media.speakingAllowed=false;for(const c of [...state.media.calls.values()])if(c.scope==='room'&&c.kind==='audio')mediaEndCall(c.id,false);renderMedia();return;}
-  if(m.t==='media-speaker-state'){if(state.room.role==='host'){const sid=String(m.fromMemberId);if(m.speaker)state.media.speakerIds.add(sid);else state.media.speakerIds.delete(sid);for(const id of mediaConnectedMemberIds())if(String(id)!==String(state.memberId))mediaSendSignal(id,{t:'media-speaker-state',fromMemberId:sid,toMemberId:id,speaker:!!m.speaker,name:m.name||peerDisplayNameByMember(sid)}).catch(()=>{});renderMedia();}else{const sid=String(m.fromMemberId);if(m.speaker)state.media.speakerIds.add(sid);else state.media.speakerIds.delete(sid);renderMedia();}return;}
-  if(m.t==='media-hand'){if(state.room.role==='host'){state.media.hands.set(String(m.fromMemberId),{name:m.fromName||peerDisplayNameByMember(m.fromMemberId),at:Date.now()});renderMedia();maybeNotify('Raise hand',`${m.fromName||'A member'} wants to speak.`);}return;}
+  if(m.t==='media-speaker-state'){
+    if(state.room.role==='host'){
+      if(fromMemberId&&senderPeerMemberId&&String(fromMemberId)!==String(senderPeerMemberId))return;
+      const sid=String(senderPeerMemberId||fromMemberId||'');
+      if(!sid||!state.room.members.has(sid)||sid===String(state.memberId))return;
+      if(m.speaker){
+        if(state.media.roomVoiceMode==='admin')return;
+        if(state.media.roomVoiceMode==='moderated'&&!state.media.allowedSpeakers.has(sid))return;
+        if(state.media.roomVoiceMode==='open'&&state.media.speakerIds.size>=4&&!state.media.speakerIds.has(sid))return;
+      }
+      if(m.speaker)state.media.speakerIds.add(sid);else state.media.speakerIds.delete(sid);
+      for(const id of mediaConnectedMemberIds())if(String(id)!==String(state.memberId))mediaSendSignal(id,{t:'media-speaker-state',fromMemberId:sid,toMemberId:id,speaker:!!m.speaker,name:m.name||peerDisplayNameByMember(sid)}).catch(()=>{});
+      renderMedia();
+    }else{
+      if(!mediaSignalFromAdmin(peerId,m))return;
+      const sid=String(m.fromMemberId);
+      if(m.speaker)state.media.speakerIds.add(sid);else state.media.speakerIds.delete(sid);
+      renderMedia();
+    }
+    return;
+  }
+  if(m.t==='media-hand'){if(state.room.role==='host'){if(fromMemberId&&senderPeerMemberId&&String(fromMemberId)!==String(senderPeerMemberId))return;const sid=String(senderPeerMemberId||fromMemberId||'');if(!sid||!state.room.members.has(sid)||sid===String(state.memberId))return;state.media.hands.set(sid,{name:m.fromName||peerDisplayNameByMember(sid),at:Date.now()});renderMedia();maybeNotify('Raise hand',`${m.fromName||'A member'} wants to speak.`);}return;}
   if(m.t==='media-permission'){if(String(m.toMemberId)===String(state.memberId)){state.media.speakingAllowed=!!m.allow;renderMedia();if(!m.allow&&state.media.speakerIds.has(String(state.memberId)))stopRoomVoiceAs(state.memberId);}return;}
-  if(m.t==='media-presenter-request'){if(state.room.role==='host'){state.media.videoRequests.set(String(m.fromMemberId),{name:m.fromName||peerDisplayNameByMember(m.fromMemberId),at:Date.now()});renderMedia();maybeNotify('Presenter request',`${m.fromName||'A member'} wants to present video.`);}return;}
+  if(m.t==='media-presenter-request'){if(state.room.role==='host'){if(fromMemberId&&senderPeerMemberId&&String(fromMemberId)!==String(senderPeerMemberId))return;const sid=String(senderPeerMemberId||fromMemberId||'');if(!sid||!state.room.members.has(sid)||sid===String(state.memberId))return;state.media.videoRequests.set(sid,{name:m.fromName||peerDisplayNameByMember(sid),at:Date.now()});renderMedia();maybeNotify('Presenter request',`${m.fromName||'A member'} wants to present video.`);}return;}
   if(m.t==='media-presenter-start'){if(String(m.toMemberId)===String(state.memberId)) {try{await mediaBroadcast('video',mediaRoomTargets(),'room',true);}catch{}renderMedia();}return;}
   if(m.t==='media-presenter-stop'){if(String(m.toMemberId)===String(state.memberId)){mediaStopScope('room','video');state.media.roomVideoPresenterId='';renderMedia();}return;}
   if(m.t==='media-room-presenter'){state.media.roomVideoPresenterId=String(m.presenterId||'');state.media.roomVideoActive=!!state.media.roomVideoPresenterId;renderMedia();return;}
@@ -2979,8 +3053,9 @@ function wbActivate(sessionId,load=true,active=true){
   wbNormalizeTextGeometry();renderWhiteboard();
 }
 function wbDeactivate(){state.whiteboard.active=false;state.whiteboard.drawing=null;state.whiteboard.selectedObjectId='';wbPersist();renderWhiteboard();}
-function wbCanEdit(){return state.room.active&&state.whiteboard.active&&(state.room.role==='host'||state.whiteboard.policy==='collab');}
-function wbCanAdmin(){return state.room.active&&state.room.role==='host';}
+function roomAdminSessionActive(){const adminId=String(state.room.adminId||'');return !!state.room.active&&state.room.role==='host'&&(!adminId||adminId===String(state.memberId));}
+function wbCanEdit(){return state.room.active&&state.whiteboard.active&&(roomAdminSessionActive()||state.whiteboard.policy==='collab');}
+function wbCanAdmin(){return roomAdminSessionActive();}
 function wbPageNameUnique(name,exceptId=''){const clean=String(name||'').trim().toLowerCase();return state.whiteboard.pages.every(p=>p.id===exceptId||p.name.trim().toLowerCase()!==clean);}
 function wbPushUndo(){const page=wbCurrentPage();if(!page)return;state.whiteboard.undo.push(JSON.stringify(page.objects));if(state.whiteboard.undo.length>50)state.whiteboard.undo.shift();state.whiteboard.redo=[];}
 function wbRoomStatePayload(includeSnapshot=true){
@@ -2988,7 +3063,7 @@ function wbRoomStatePayload(includeSnapshot=true){
   if(includeSnapshot&&state.whiteboard.active)out.snapshot=wbSnapshot();
   return out;
 }
-function wbBroadcastRoomState(){if(state.room.role!=='host')return;for(const p of connectedPeers().filter(x=>x.authenticated&&x.room))sendJson(wbRoomStatePayload(true),p.id).catch(()=>{});}
+function wbBroadcastRoomState(){if(!wbCanAdmin())return;for(const p of connectedPeers().filter(x=>x.authenticated&&x.room))sendJson(wbRoomStatePayload(true),p.id).catch(()=>{});}
 function wbIsAdminPeer(peerId,m={}){
   if(state.room.role==='host')return false;
   const p=getPeer(peerId);
@@ -2997,7 +3072,7 @@ function wbIsAdminPeer(peerId,m={}){
   return !!senderId && ((adminId&&senderId===adminId)||p?.roomRole==='Admin');
 }
 function wbSetRoomActive(active,announce=true){
-  if(state.room.role!=='host'||!state.room.active)return;
+  if(!wbCanAdmin())return;
   const sid=String(state.room.sessionId||state.whiteboard.sessionId||'');
   state.whiteboard.sessionId=sid;
   state.whiteboard.userClosed=!active;
@@ -3042,10 +3117,10 @@ function wbHandleRoomState(m,peerId){
   if(m.policy==='collab'||m.policy==='admin')state.whiteboard.policy=m.policy;
   renderWhiteboard();
 }
-function wbAdminToggle(){if(state.room.role!=='host'||!state.room.active)return;wbSetRoomActive(!state.whiteboard.active,true);}
-function wbSnapshotForPeer(peerId){if(!state.room.active||state.room.role!=='host')return;sendJson({t:'wb-sync',snapshot:wbSnapshot(),fromMemberId:state.memberId},peerId).catch(()=>{});}
-function wbBroadcastPolicy(){if(state.room.role!=='host')return;for(const p of connectedPeers().filter(x=>x.authenticated&&x.room))sendJson({t:'wb-policy',policy:state.whiteboard.policy},p.id).catch(()=>{});}
-function wbBroadcastPage(){if(state.room.role!=='host')return;for(const p of connectedPeers().filter(x=>x.authenticated&&x.room))sendJson({t:'wb-page',pageId:state.whiteboard.currentPageId},p.id).catch(()=>{});}
+function wbAdminToggle(){if(!wbCanAdmin())return;wbSetRoomActive(!state.whiteboard.active,true);}
+function wbSnapshotForPeer(peerId){if(!wbCanAdmin())return;sendJson({t:'wb-sync',snapshot:wbSnapshot(),fromMemberId:state.memberId},peerId).catch(()=>{});}
+function wbBroadcastPolicy(){if(!wbCanAdmin())return;for(const p of connectedPeers().filter(x=>x.authenticated&&x.room))sendJson({t:'wb-policy',policy:state.whiteboard.policy},p.id).catch(()=>{});}
+function wbBroadcastPage(){if(!wbCanAdmin())return;for(const p of connectedPeers().filter(x=>x.authenticated&&x.room))sendJson({t:'wb-page',pageId:state.whiteboard.currentPageId},p.id).catch(()=>{});}
 function wbRecordLocalChange(beforeState){state.whiteboard.undo.push(JSON.stringify(beforeState));if(state.whiteboard.undo.length>50)state.whiteboard.undo.shift();state.whiteboard.redo=[];}
 function wbBoardState(){return {pages:JSON.parse(JSON.stringify(state.whiteboard.pages)),currentPageId:state.whiteboard.currentPageId,policy:state.whiteboard.policy};}
 function wbRestoreBoardState(snapshot){if(!snapshot?.pages?.length)return false;state.whiteboard.pages=snapshot.pages.map((p,i)=>({id:String(p.id||`page-${i+1}`),name:String(p.name||`Page ${i+1}`),objects:Array.isArray(p.objects)?p.objects:[]}));state.whiteboard.currentPageId=snapshot.currentPageId&&state.whiteboard.pages.some(p=>p.id===snapshot.currentPageId)?snapshot.currentPageId:state.whiteboard.pages[0].id;state.whiteboard.policy=snapshot.policy==='collab'?'collab':'admin';wbNormalizeTextGeometry();return true;}
@@ -3256,6 +3331,8 @@ async function wbCompressImage(file){
 async function wbAddImages(files){
   if(!wbCanEdit()||!files?.length||state.whiteboard.imageBusy)return;
   const page=wbCurrentPage();if(!page)return;
+  const previousTool=String(state.whiteboard.tool||'select');
+  const restoreTool=String(state.whiteboard.lastNonImageTool||'pen');
   state.whiteboard.imageBusy=true;
   state.whiteboard.drawing=null;
   els.whiteboardCanvasWrap?.classList.remove('wb-pan-active');
@@ -3277,7 +3354,10 @@ async function wbAddImages(files){
         usedBytes+=img.bytes;offset+=24;added++;
       }catch(err){toast(err.message||I18N[state.lang].wbImageFailed);}
     }
-    if(added)state.whiteboard.tool='select';
+    if(added){
+      state.whiteboard.tool=previousTool==='image'?restoreTool:previousTool;
+      state.whiteboard.drawing=null;
+    }
   }finally{
     state.whiteboard.imageBusy=false;
     renderWhiteboard();
@@ -3293,6 +3373,7 @@ function wbSetTool(tool){
   state.whiteboard.drawing=null;
   els.whiteboardCanvasWrap?.classList.remove('wb-pan-active');
   const safe=['select','pan','pen','highlighter','line','arrow','rect','ellipse','text','note','image','eraser'].includes(tool)?tool:'select';
+  if(safe!=='image')state.whiteboard.lastNonImageTool=safe;
   state.whiteboard.tool=safe;
   renderWhiteboard();
 }
@@ -3688,12 +3769,13 @@ function classifyCandidatePath(local,remote){
   if(lt==='srflx'||rt==='srflx'||lt==='prflx'||rt==='prflx')return 'Direct Internet';
 
   if(lt==='host'&&rt==='host'){
-    // Host candidates with non-local/public addresses are direct, but are not
-    // safe to describe as LAN/host traffic.
-    if(local?.address&&remote?.address)return (localPrivate&&remotePrivate)?'Direct host':'Direct Internet';
+    // Host candidates are direct peer candidates; classify as host only when
+    // both addresses are private/local, otherwise treat as direct Internet.
+    return (localPrivate&&remotePrivate)?'Direct host':'Direct Internet';
   }
 
   if(localPrivate&&remotePrivate)return 'Direct host';
+  if(lt||rt)return 'Direct Internet';
   return 'Unknown';
 }
 async function readConnectionStats(pc){
