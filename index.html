@@ -4202,21 +4202,3 @@ async function defaultInit(){applyLang();browserChecks();renderNotificationButto
 </script>
 </body>
 </html>
-onn('Not connected',I18N[state.lang].defaultConnDetail,'warn');showPairCode('', '');setQuickStatus(I18N[state.lang].internetDefaultHint,'good');renderChat();}
-
-})();
-</script>
-</body>
-</html>
-'room');if(params.get('mode')==='internet'&&/^\d{6}$/.test(sharedRoom||'')){setNetworkMode(true);setTimeout(()=>showModal('Join shared room',`<div class="modal-message">Room <b>${escapeHtml(sharedRoom)}</b> is ready to join.</div>`,()=>{joinInternetRoomCode(sharedRoom).catch(err=>showModal('Join failed',`<div class="notice bad">${escapeHtml(err.message||String(err))}</div>`));return true;}),100);}else{const last=getLastRoomSession();if(last?.mode==='internet'&&last.role==='member'){setNetworkMode(true);setTimeout(()=>joinInternetRoomCode(last.code).catch(()=>{if(state.room.active&&state.room.role==='join')scheduleInternetReconnect('The previous room is not ready yet.');}),450);}else if(last?.mode==='internet'&&last.role==='admin'){setNetworkMode(true);setTimeout(()=>createInternetRoom(last.code).catch(()=>{}),450);}}}catch{}setConn('Not connected',I18N[state.lang].defaultConnDetail,'warn');showPairCode('', '');setQuickStatus(I18N[state.lang].internetDefaultHint,'good');renderChat();}
-
-})();
-</script>
-</body>
-</html>
-onn('Not connected',I18N[state.lang].defaultConnDetail,'warn');showPairCode('', '');setQuickStatus(I18N[state.lang].internetDefaultHint,'good');renderChat();}
-
-})();
-</script>
-</body>
-</html>
