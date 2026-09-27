@@ -2431,18 +2431,21 @@ async function mediaEnsureOutboundVideo(call){
     fresh.enabled=true;
 
     const sender=call.pc.getSenders?.().find(s=>s.track&&s.track.kind==='video');
-    if(sender)await sender.replaceTrack(fresh);
+    if(sender){
+      try{await sender.replaceTrack(null);}catch{}
+      await sender.replaceTrack(fresh);
+    }
 
     const oldTrack=localVideo;
     try{call.localStream.removeTrack(oldTrack);}catch{}
     call.localStream.addTrack(fresh);
     try{oldTrack.stop();}catch{}
 
-    if(call.initiator){
-      const offer=await call.pc.createOffer();
-      await call.pc.setLocalDescription(offer);
-      await mediaSendSignal(call.peerMemberId,{t:'media-reoffer',callId:call.id,offer:call.pc.localDescription?.toJSON?call.pc.localDescription.toJSON():call.pc.localDescription});
-    }
+    const offer=await call.pc.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:true});
+    await call.pc.setLocalDescription(offer);
+    await mediaSendSignal(call.peerMemberId,{t:'media-reoffer',callId:call.id,offer:call.pc.localDescription?.toJSON?call.pc.localDescription.toJSON():call.pc.localDescription});
+
+    mediaDebug('media.video.recover.success',{callId:call.id});
     renderMedia();
   }catch(err){
     mediaDebug('media.video.recover.error',{callId:call?.id||'',message:err?.message||String(err)});
@@ -2642,7 +2645,7 @@ async function mediaBroadcast(kind,targets,scope='room',broadcast=true){
     let call=null;
     try{
       call={id:mediaCallId(),peerMemberId:memberId,kind:callKind,scope,broadcast:true,speakerMemberId:String(state.memberId),initiator:true,active:false,status:'calling',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:scope==='room'?'Room':'Direct peer'};
-      state.media.calls.set(call.id,call);mediaArmCallTimeout(call);const pc=await mediaCreatePeer(call,stream);const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+      state.media.calls.set(call.id,call);mediaArmCallTimeout(call);const pc=await mediaCreatePeer(call,stream);const offer=await pc.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:callKind==='video'});await pc.setLocalDescription(offer);
       await mediaSendSignal(memberId,{t:'media-invite',callId:call.id,kind:callKind,scope,broadcast,offer:pc.localDescription?.toJSON?pc.localDescription.toJSON():pc.localDescription,fromName:state.device});
       successCount++;
     }catch{
