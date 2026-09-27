@@ -2339,7 +2339,9 @@ async function mediaPlayElement(el,call){
   }
 }
 function mediaAttachRemoteAudio(call,stream){
-  if(!call||!stream||call.kind!=='audio')return false;
+  if(!call||!stream)return false;
+  const hasAudio=!!stream.getAudioTracks?.().length;
+  if(!hasAudio)return false;
   try{
     if(!call.audioEl){
       const a=document.createElement('audio');
@@ -2406,6 +2408,47 @@ function mediaSendSignal(targetMemberId,msg){
   if(targetId===String(state.room.adminId))return sendJson(base,adminPeer.id);
   return sendJson({...base,routeToMemberId:targetId,mediaRelay:true},adminPeer.id);
 }
+async function mediaEnsureOutboundVideo(call){
+  if(!call?.pc||call.kind!=='video'||!call.localStream)return;
+  const localVideo=call.localStream.getVideoTracks?.()[0]||null;
+  if(!localVideo)return;
+  try{
+    const report=await call.pc.getStats();
+    let bytes=0,frames=0;
+    report.forEach(r=>{
+      if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')){
+        bytes=Math.max(bytes,Number(r.bytesSent||0));
+        frames=Math.max(frames,Number(r.framesSent||0));
+      }
+    });
+    mediaDebug('media.video.outbound-check',{callId:call.id,bytesSent:bytes,framesSent:frames});
+    if(bytes>2500||frames>2)return;
+
+    mediaDebug('media.video.recover.start',{callId:call.id,reason:'low-outbound-video'});
+    const fallback=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+    const fresh=fallback.getVideoTracks?.()[0]||null;
+    if(!fresh)return;
+    fresh.enabled=true;
+
+    const sender=call.pc.getSenders?.().find(s=>s.track&&s.track.kind==='video');
+    if(sender)await sender.replaceTrack(fresh);
+
+    const oldTrack=localVideo;
+    try{call.localStream.removeTrack(oldTrack);}catch{}
+    call.localStream.addTrack(fresh);
+    try{oldTrack.stop();}catch{}
+
+    if(call.initiator){
+      const offer=await call.pc.createOffer();
+      await call.pc.setLocalDescription(offer);
+      await mediaSendSignal(call.peerMemberId,{t:'media-reoffer',callId:call.id,offer:call.pc.localDescription?.toJSON?call.pc.localDescription.toJSON():call.pc.localDescription});
+    }
+    renderMedia();
+  }catch(err){
+    mediaDebug('media.video.recover.error',{callId:call?.id||'',message:err?.message||String(err)});
+  }
+}
+
 async function mediaRestartIce(call){
   if(!call?.pc||call.iceRestartTried||!call.initiator)return false;
   call.iceRestartTried=true;call.status='reconnecting';renderMedia();
@@ -2439,7 +2482,7 @@ async function mediaCreatePeer(call,localStream){
   pc.oniceconnectionstatechange=()=>{call.iceState=pc.iceConnectionState;renderMedia();if(pc.iceConnectionState==='failed'){const hasTurn=buildIceServers().some(s=>s.urls.some(u=>/^turns?:/i.test(u)));setConn('Media ICE failed',hasTurn?'No usable media candidate pair was found. One ICE restart will be attempted.':'Direct media path failed. No TURN relay is configured for this browser/network.','bad');if(!call.iceRestartTried){mediaRestartIce(call).then(ok=>{if(!ok&&state.media.calls.has(call.id))setTimeout(()=>mediaEndCall(call.id,false),1200);});}else setTimeout(()=>{if(state.media.calls.has(call.id))mediaEndCall(call.id,false);},1200);}};
   pc.onconnectionstatechange=()=>{
     const st=pc.connectionState;call.connectionState=st;mediaDebug('media.pc.state',{callId:call.id,state:st,iceState:pc.iceConnectionState||''});
-    if(st==='connected'){call.active=true;call.status='connected';mediaClearCallTimeout(call);renderMedia();}
+    if(st==='connected'){call.active=true;call.status='connected';mediaClearCallTimeout(call);renderMedia();if(call.kind==='video'&&call.localStream){setTimeout(()=>{if(state.media.calls.has(call.id))mediaEnsureOutboundVideo(call).catch(()=>{});},3500);}}
     if(['failed','closed'].includes(st)){mediaEndCall(call.id,false);}
     if(st==='disconnected'){call.status='reconnecting';renderMedia();setTimeout(()=>{if(state.media.calls.has(call.id)&&call.pc?.connectionState==='disconnected')mediaEndCall(call.id,false);},6000);}
   };
@@ -2491,6 +2534,12 @@ async function mediaStartDirectCall(memberId,kind){
   let call=null;
   try{
     const stream=await mediaGetLocalStream(callKind);
+    if(callKind==='video'){
+      const vt=stream.getVideoTracks?.()[0]||null;
+      if(!vt)throw new Error('Camera is unavailable for video call.');
+      vt.enabled=true;
+      mediaDebug('media.video.local-track',{state:vt.readyState,muted:!!vt.muted,label:vt.label||''});
+    }
     call={id:mediaCallId(),peerMemberId:String(memberId),kind:callKind,scope:'direct',broadcast:false,initiator:true,active:false,status:'calling',localStream:stream,remoteStream:null,pc:null,pendingIce:[],label:'Direct peer'};
     state.media.calls.set(call.id,call);mediaArmCallTimeout(call);renderMedia();
     const pc=await mediaCreatePeer(call,stream);
