@@ -2364,28 +2364,79 @@ async function mediaGetLocalStream(kind){
   const live=s=>s&&s.getTracks().some(t=>t.readyState==='live');
   const audioLive=s=>live(s)&&s.getAudioTracks().some(t=>t.readyState==='live');
   const videoLive=s=>live(s)&&s.getVideoTracks().some(t=>t.readyState==='live');
-  if(wantsVideo&&videoLive(state.media.localAV)&&audioLive(state.media.localAV))return state.media.localAV;
+  if(wantsVideo&&videoLive(state.media.localAV)&&audioLive(state.media.localAV)){
+    state.media.localAV.getTracks().forEach(t=>t.enabled=true);
+    return state.media.localAV;
+  }
   if(!wantsVideo&&audioLive(state.media.localAV))return state.media.localAV;
   if(!wantsVideo&&audioLive(state.media.localAudio))return state.media.localAudio;
   if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera and microphone access is unavailable in this browser.');
   state.media.getUserMediaPromises ||= {};
   const key=wantsVideo?'video':'audio';
   if(state.media.getUserMediaPromises[key])return state.media.getUserMediaPromises[key];
-  const constraints=wantsVideo
-    ?{audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:{facingMode:'user',width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}}
-    :{audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false};
-  state.media.getUserMediaPromises[key]=navigator.mediaDevices.getUserMedia(constraints).then(stream=>{
-    if(wantsVideo&&(!stream.getVideoTracks||!stream.getVideoTracks().length)){
-      mediaDebug('media.getUserMedia.error',{kind:'video',reason:'no-video-track'});
-      throw new Error('Video call could not start: camera track is missing. Check camera permissions and device availability.');
+
+  const audioConstraints={echoCancellation:true,noiseSuppression:true,autoGainControl:true};
+  const primaryVideo={facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:24,max:30}};
+
+  const buildSplitVideoAudioStream=async()=>{
+    const videoOnly=await navigator.mediaDevices.getUserMedia({video:primaryVideo,audio:false});
+    let audioOnly=null;
+    try{audioOnly=await navigator.mediaDevices.getUserMedia({audio:audioConstraints,video:false});}catch{}
+    const merged=new MediaStream();
+    videoOnly.getVideoTracks().forEach(t=>merged.addTrack(t));
+    audioOnly?.getAudioTracks?.().forEach(t=>merged.addTrack(t));
+    return merged;
+  };
+
+  const getVideoStream=async()=>{
+    try{return await buildSplitVideoAudioStream();}
+    catch(splitErr){
+      mediaDebug('media.getUserMedia.retry',{kind:'video',reason:'split-failed',name:splitErr?.name||''});
+      try{return await navigator.mediaDevices.getUserMedia({audio:audioConstraints,video:primaryVideo});}
+      catch(err){
+        mediaDebug('media.getUserMedia.retry',{kind:'video',reason:'primary-failed',name:err?.name||''});
+        return await navigator.mediaDevices.getUserMedia({audio:audioConstraints,video:true});
+      }
     }
-    if(wantsVideo)state.media.localAV=stream;else state.media.localAudio=stream;
-    mediaDebug('media.getUserMedia.success',{kind:wantsVideo?'video':'audio',audioTracks:stream.getAudioTracks?.().length||0,videoTracks:stream.getVideoTracks?.().length||0});
-    return stream;
-  }).catch(err=>{
-    mediaDebug('media.getUserMedia.error',{kind:wantsVideo?'video':'audio',name:err?.name||'',message:err?.message||String(err)});
-    throw err;
-  }).finally(()=>{state.media.getUserMediaPromises[key]=null;});
+  };
+
+  state.media.getUserMediaPromises[key]=(wantsVideo?getVideoStream():navigator.mediaDevices.getUserMedia({audio:audioConstraints,video:false}))
+    .then(async stream=>{
+      if(wantsVideo&&(!stream.getVideoTracks||!stream.getVideoTracks().length)){
+        mediaDebug('media.getUserMedia.error',{kind:'video',reason:'no-video-track'});
+        throw new Error('Video call could not start: camera track is missing. Check camera permissions and device availability.');
+      }
+
+      stream.getAudioTracks?.().forEach(t=>t.enabled=true);
+      stream.getVideoTracks?.().forEach(t=>t.enabled=true);
+
+      if(wantsVideo){
+        const vt=stream.getVideoTracks?.()[0]||null;
+        mediaDebug('media.video.track-state',{muted:!!vt?.muted,readyState:vt?.readyState||'none',label:vt?.label||''});
+        if(vt&&vt.muted){
+          await new Promise(r=>setTimeout(r,700));
+          if(vt.muted){
+            mediaDebug('media.video.track-recover',{reason:'muted-forever-reacquire'});
+            const fallbackVideo=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+            const fresh=fallbackVideo.getVideoTracks?.()[0]||null;
+            if(fresh){
+              fresh.enabled=true;
+              try{stream.removeTrack(vt);}catch{}
+              try{vt.stop();}catch{}
+              stream.addTrack(fresh);
+            }
+          }
+        }
+      }
+
+      if(wantsVideo)state.media.localAV=stream;else state.media.localAudio=stream;
+      mediaDebug('media.getUserMedia.success',{kind:wantsVideo?'video':'audio',audioTracks:stream.getAudioTracks?.().length||0,videoTracks:stream.getVideoTracks?.().length||0});
+      return stream;
+    }).catch(err=>{
+      mediaDebug('media.getUserMedia.error',{kind:wantsVideo?'video':'audio',name:err?.name||'',message:err?.message||String(err)});
+      throw err;
+    }).finally(()=>{state.media.getUserMediaPromises[key]=null;});
+
   return state.media.getUserMediaPromises[key];
 }
 function mediaSendSignal(targetMemberId,msg){
@@ -2495,11 +2546,11 @@ async function mediaCreatePeer(call,localStream){
       const audioTrack=localStream.getAudioTracks?.()[0]||null;
       if(videoTrack){
         videoTrack.enabled=true;
-        try{pc.addTransceiver(videoTrack,{streams:[localStream],direction:'sendrecv'});}catch{pc.addTrack(videoTrack,localStream);}
+        pc.addTrack(videoTrack,localStream);
       }
       if(audioTrack){
         audioTrack.enabled=true;
-        try{pc.addTransceiver(audioTrack,{streams:[localStream],direction:'sendrecv'});}catch{pc.addTrack(audioTrack,localStream);}
+        pc.addTrack(audioTrack,localStream);
       }
       if(!videoTrack){
         mediaDebug('media.video.error',{callId:call.id,reason:'missing-local-video-track'});
